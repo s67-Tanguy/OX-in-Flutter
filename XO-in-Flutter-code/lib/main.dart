@@ -1,15 +1,17 @@
 import 'package:flutter/material.dart';
+import 'dart:math' as math; // Import for math.pi
 
 void main() {
-  runApp(const MaterialApp(home: OXBoard()));
+  runApp(const MaterialApp(home: OXBoard(), debugShowCheckedModeBanner: false));
 }
 
-/// บอกว่าจะวาด x หรือ o ที่ตำแหน่งไหน
+/// A class representing a mark (X or O) on the board.
+/// It stores the position, type ('O' or 'X'), and grid coordinates.
 class Mark {
   final Offset position;
   final String type; // 'O' or 'X'
-  final int row; //  Row    index of the cell this mark occupies
-  final int col; // Column  index of the cell this mark occupies
+  final int row; // Row index of the cell this mark occupies
+  final int col; // Column index of the cell this mark occupies
 
   Mark({
     required this.position,
@@ -29,10 +31,11 @@ class Mark {
           col == other.col;
 
   @override
-  int get hashCode => position.hashCode ^ type.hashCode ^ row.hashCode ^ col.hashCode;
+  int get hashCode =>
+      position.hashCode ^ type.hashCode ^ row.hashCode ^ col.hashCode;
 }
 
-/// The main board
+/// The main OX board widget, managing game state and animations.
 class OXBoard extends StatefulWidget {
   const OXBoard({super.key});
 
@@ -40,7 +43,7 @@ class OXBoard extends StatefulWidget {
   State<OXBoard> createState() => _OXBoardState();
 }
 
-class _OXBoardState extends State<OXBoard> {
+class _OXBoardState extends State<OXBoard> with TickerProviderStateMixin {
   // A list to store the marks (x or o)
   List<Mark> _marks = <Mark>[];
   // The currently selected tool for drawing
@@ -50,9 +53,28 @@ class _OXBoardState extends State<OXBoard> {
   bool _isGameOver = false;
   String? _winnerType; // 'O', 'X', or null if draw/no winner yet
 
+  // Animation variables for the 'O' mark
+  AnimationController? _oAnimationController;
+  Animation<double>? _oAnimation;
+  Mark? _currentAnimatingOMark; // Stores the 'O' mark currently being animated
+
+  // Animation variables for the 'X' mark
+  AnimationController? _xAnimationController;
+  Animation<double>? _xAnimation;
+  Mark? _currentAnimatingXMark; // Stores the 'X' mark currently being animated
+
   static const double _markSize = 100.0;
   static const int _gridSize = 3; // Define grid size consistently
   static const String _emptyCell = '-'; // Placeholder for an empty cell
+
+  @override
+  void dispose() {
+    _oAnimationController
+        ?.dispose(); // Dispose the 'O' controller when the widget is disposed
+    _xAnimationController
+        ?.dispose(); // Dispose the 'X' controller when the widget is disposed
+    super.dispose();
+  }
 
   /// Converts the current [_marks] list into a 1D list representing the grid state.
   List<String> _getMovesList() {
@@ -81,7 +103,10 @@ class _OXBoardState extends State<OXBoard> {
             break;
           }
         }
-        if (rowWin) return true;
+        if (rowWin) {
+          _winnerType = first; // Set winner type
+          return true;
+        }
       }
     }
 
@@ -96,7 +121,10 @@ class _OXBoardState extends State<OXBoard> {
             break;
           }
         }
-        if (colWin) return true;
+        if (colWin) {
+          _winnerType = first; // Set winner type
+          return true;
+        }
       }
     }
 
@@ -110,7 +138,10 @@ class _OXBoardState extends State<OXBoard> {
           break;
         }
       }
-      if (diag1Win) return true;
+      if (diag1Win) {
+        _winnerType = firstDiagonal1; // Set winner type
+        return true;
+      }
     }
 
     // Check anti-diagonal (top-right to bottom-left)
@@ -124,7 +155,10 @@ class _OXBoardState extends State<OXBoard> {
           break;
         }
       }
-      if (diag2Win) return true;
+      if (diag2Win) {
+        _winnerType = firstDiagonal2; // Set winner type
+        return true;
+      }
     }
 
     return false;
@@ -179,7 +213,7 @@ class _OXBoardState extends State<OXBoard> {
   /// Handles a tap down event on the drawing area.
   /// Converts the global tap position to a local position relative to the CustomPaint
   /// and adds a new Mark to the list, placing it at the center of the tapped grid cell.
-  /// if the cell is already occupied, don't draw a new mark.
+  /// If the cell is already occupied, don't draw a new mark.
   void _handleTap(Offset localPosition, Size boardSize) {
     if (_isGameOver) {
       // Do not allow placing marks if the game is over
@@ -195,8 +229,9 @@ class _OXBoardState extends State<OXBoard> {
     final int row = (localPosition.dy / cellHeight).floor();
 
     // Check if a mark already exists in the tapped cell
-    final bool cellOccupied =
-        _marks.any((Mark mark) => mark.row == row && mark.col == col);
+    final bool cellOccupied = _marks.any(
+      (Mark mark) => mark.row == row && mark.col == col,
+    );
 
     // If the cell is marked, do not draw a new mark.
     if (cellOccupied) {
@@ -210,25 +245,96 @@ class _OXBoardState extends State<OXBoard> {
     final Offset cellCenterPosition = Offset(centerX, centerY);
 
     setState(() {
-      // Add the new mark for the tapped cell.
-      _marks = List<Mark>.from(_marks)
-        ..add(
-          Mark(
-            position: cellCenterPosition,
-            type: _selectedTool,
-            row: row,
-            col: col,
-          ),
+      final Mark newMark = Mark(
+        position: cellCenterPosition,
+        type: _selectedTool,
+        row: row,
+        col: col,
+      );
+
+      // Stop and dispose any *other* ongoing animation before starting a new one.
+      // This ensures only one mark animates at a time.
+      if (newMark.type == 'O') {
+        _xAnimationController?.stop();
+        _xAnimationController?.dispose();
+        _xAnimationController = null;
+        _xAnimation = null;
+        _currentAnimatingXMark = null; // Clear X's animating mark
+      } else {
+        // newMark.type == 'X'
+        _oAnimationController?.stop();
+        _oAnimationController?.dispose();
+        _oAnimationController = null;
+        _oAnimation = null;
+        _currentAnimatingOMark = null; // Clear O's animating mark
+      }
+
+      _marks = List<Mark>.from(_marks)..add(newMark);
+
+      // Handle 'O' animation
+      if (newMark.type == 'O') {
+        _currentAnimatingOMark = newMark;
+        _oAnimationController = AnimationController(
+          vsync: this,
+          duration: const Duration(milliseconds: 300),
         );
+        _oAnimation = Tween<double>(
+          begin: 0.0,
+          end: 1.0,
+        ).animate(_oAnimationController!);
+
+        _oAnimationController!.addListener(() {
+          setState(() {
+            // No-op, just rebuilds the UI
+          });
+        });
+
+        _oAnimationController!.forward().whenCompleteOrCancel(() {
+          // Animation finished, ensure current animating mark is cleared
+          if (_currentAnimatingOMark == newMark) {
+            setState(() {
+              _currentAnimatingOMark = null;
+            });
+          }
+        });
+      } else {
+        // Handle 'X' animation
+        _currentAnimatingXMark = newMark;
+        _xAnimationController = AnimationController(
+          vsync: this,
+          duration: const Duration(milliseconds: 300),
+        );
+        _xAnimation = Tween<double>(
+          begin: 0.0,
+          end: 1.0,
+        ).animate(_xAnimationController!);
+
+        _xAnimationController!.addListener(() {
+          setState(() {
+            // No-op, just rebuilds the UI
+          });
+        });
+
+        _xAnimationController!.forward().whenCompleteOrCancel(() {
+          if (_currentAnimatingXMark == newMark) {
+            setState(() {
+              _currentAnimatingXMark = null;
+            });
+          }
+        });
+      }
 
       if (_checkWinner()) {
         _isGameOver = true;
-        _winnerType = _selectedTool;
+        _oAnimationController?.stop(); // Stop O animation on game over
+        _xAnimationController?.stop(); // Stop X animation on game over
         _showWinnerDialog();
       } else if (_marks.length == _gridSize * _gridSize) {
         // All cells are filled, and no winner, so it's a draw
         _isGameOver = true;
         _winnerType = null; // Indicate a draw
+        _oAnimationController?.stop(); // Stop O animation on game over
+        _xAnimationController?.stop(); // Stop X animation on game over
         _showDrawDialog();
       }
     });
@@ -247,11 +353,20 @@ class _OXBoardState extends State<OXBoard> {
   /// Clears all drawn marks from the board and resets game state.
   void _clearBoard() {
     setState(() {
-      // Create a new empty list instance to clear the board.
-      _marks = <Mark>[];
+      _marks = <Mark>[]; // Create a new empty list instance to clear the board.
       _isGameOver = false;
       _winnerType = null;
       _selectedTool = 'O'; // Reset selected tool to default
+
+      _oAnimationController?.dispose(); // Dispose any ongoing 'O' animation
+      _oAnimationController = null;
+      _oAnimation = null;
+      _currentAnimatingOMark = null;
+
+      _xAnimationController?.dispose(); // Dispose any ongoing 'X' animation
+      _xAnimationController = null;
+      _xAnimation = null;
+      _currentAnimatingXMark = null;
     });
   }
 
@@ -289,6 +404,13 @@ class _OXBoardState extends State<OXBoard> {
                       marks: _marks,
                       markSize: _markSize,
                       gridSize: _gridSize,
+                      animatingOMark: _currentAnimatingOMark,
+                      animationValue:
+                          _oAnimation?.value, // Pass current O animation value
+                      animatingXMark:
+                          _currentAnimatingXMark, // Pass current X animating mark
+                      xAnimationValue:
+                          _xAnimation?.value, // Pass current X animation value
                     ),
                   ),
                 );
@@ -347,16 +469,25 @@ class _OXBoardState extends State<OXBoard> {
   }
 }
 
-/// A CustomPainter for NxN grid and all the 'O' and 'X'
+/// A CustomPainter for drawing the NxN grid and all the 'O' and 'X' marks.
 class BoardPainter extends CustomPainter {
   final List<Mark> marks;
   final double markSize;
   final int gridSize;
+  final Mark? animatingOMark; // The 'O' mark currently being animated
+  final double? animationValue; // The current O animation progress (0.0 to 1.0)
+  final Mark? animatingXMark; // The 'X' mark currently being animated
+  final double?
+  xAnimationValue; // The current X animation progress (0.0 to 1.0)
 
   BoardPainter({
     required this.marks,
     required this.markSize,
     required this.gridSize,
+    this.animatingOMark,
+    this.animationValue,
+    this.animatingXMark,
+    this.xAnimationValue,
   });
 
   @override
@@ -397,29 +528,78 @@ class BoardPainter extends CustomPainter {
     // Draw each 'O' and 'X' mark based on its stored position and type
     for (final Mark mark in marks) {
       if (mark.type == 'O') {
-        canvas.drawCircle(mark.position, markSize / 2, oPaint);
+        if (mark == animatingOMark && animationValue != null) {
+          // Draw animated 'O' as an arc
+          // Starting angle: -math.pi/2 (top center)
+          // Sweep angle: ranges from 0 to 2*math.pi based on animationValue
+          final double sweepAngle = 2 * math.pi * animationValue!;
+          final Rect rect = Rect.fromCircle(
+            center: mark.position,
+            radius: markSize / 2,
+          );
+          canvas.drawArc(rect, -math.pi / 2, sweepAngle, false, oPaint);
+        } else {
+          // Draw static 'O' (already completed animation or not currently animating)
+          canvas.drawCircle(mark.position, markSize / 2, oPaint);
+        }
       } else if (mark.type == 'X') {
         final double halfSize = markSize / 2;
-        // Adjust line drawing to be centered around mark.position
-        canvas.drawLine(
-          mark.position + Offset(-halfSize, -halfSize),
-          mark.position + Offset(halfSize, halfSize),
-          xPaint,
-        );
-        canvas.drawLine(
-          mark.position + Offset(-halfSize, halfSize),
-          mark.position + Offset(halfSize, -halfSize),
-          xPaint,
-        );
+        if (mark == animatingXMark && xAnimationValue != null) {
+          // Animation for 'X'
+          final Offset p1Start = mark.position + Offset(-halfSize, -halfSize);
+          final Offset p1End = mark.position + Offset(halfSize, halfSize);
+          final Offset p2Start = mark.position + Offset(-halfSize, halfSize);
+          final Offset p2End = mark.position + Offset(halfSize, -halfSize);
+
+          // Animation for the first line (0.0 to 0.5 of total animation)
+          final double progress1 = (xAnimationValue! * 2).clamp(0.0, 1.0);
+          final Offset p1AnimatedEnd = Offset.lerp(p1Start, p1End, progress1)!;
+          canvas.drawLine(p1Start, p1AnimatedEnd, xPaint);
+
+          // Animation for the second line (0.5 to 1.0 of total animation)
+          final double progress2 = ((xAnimationValue! - 0.5) * 2).clamp(
+            0.0,
+            1.0,
+          );
+          if (progress2 > 0) {
+            // Only draw the second line if its animation has started
+            final Offset p2AnimatedEnd = Offset.lerp(
+              p2Start,
+              p2End,
+              progress2,
+            )!;
+            canvas.drawLine(p2Start, p2AnimatedEnd, xPaint);
+          }
+        } else {
+          // Draw static 'X' (already completed animation or not currently animating)
+          // Adjust line drawing to be centered around mark.position
+          canvas.drawLine(
+            mark.position + Offset(-halfSize, -halfSize),
+            mark.position + Offset(halfSize, halfSize),
+            xPaint,
+          );
+          canvas.drawLine(
+            mark.position + Offset(-halfSize, halfSize),
+            mark.position + Offset(halfSize, -halfSize),
+            xPaint,
+          );
+        }
       }
     }
   }
 
   @override
   bool shouldRepaint(covariant BoardPainter oldDelegate) {
-    // Repaint if the list of marks changes, or if markSize/gridSize change
+    // Repaint if the list of marks changes (new mark added/removed),
+    // or if markSize/gridSize change,
+    // or if the currently animating 'O' mark changes,
+    // or if the animation progress value changes.
     return oldDelegate.marks != marks ||
         oldDelegate.markSize != markSize ||
-        oldDelegate.gridSize != gridSize;
+        oldDelegate.gridSize != gridSize ||
+        oldDelegate.animatingOMark != animatingOMark ||
+        oldDelegate.animationValue != animationValue ||
+        oldDelegate.animatingXMark != animatingXMark ||
+        oldDelegate.xAnimationValue != xAnimationValue;
   }
 }
